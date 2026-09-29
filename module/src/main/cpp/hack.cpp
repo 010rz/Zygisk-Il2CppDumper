@@ -18,21 +18,22 @@
 #include <array>
 
 void hack_start(const char *game_data_dir) {
-    bool load = false;
-    for (int i = 0; i < 10; i++) {
+    // NetEase NES may expose a stub libil2cpp.so without exports first.
+    // Keep retrying until domain APIs resolve, then dump.
+    for (int i = 0; i < 120; i++) {
         void *handle = xdl_open("libil2cpp.so", 0);
         if (handle) {
-            load = true;
-            il2cpp_api_init(handle);
-            il2cpp_dump(game_data_dir);
-            break;
+            if (il2cpp_api_init(handle)) {
+                il2cpp_dump(game_data_dir);
+                return;
+            }
+            LOGI("il2cpp api not ready, retry %d", i);
         } else {
-            sleep(1);
+            LOGI("libil2cpp.so not found, retry %d", i);
         }
+        sleep(1);
     }
-    if (!load) {
-        LOGI("libil2cpp.so not found in thread %d", gettid());
-    }
+    LOGE("give up waiting il2cpp in thread %d", gettid());
 }
 
 std::string GetLibDir(JavaVM *vms) {

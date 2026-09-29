@@ -322,25 +322,39 @@ std::string dump_type(const Il2CppType *type) {
     return outPut.str();
 }
 
-void il2cpp_api_init(void *handle) {
+bool il2cpp_api_init(void *handle) {
     LOGI("il2cpp_handle: %p", handle);
     init_il2cpp_api(handle);
-    if (il2cpp_domain_get_assemblies) {
-        Dl_info dlInfo;
-        if (dladdr((void *) il2cpp_domain_get_assemblies, &dlInfo)) {
-            il2cpp_base = reinterpret_cast<uint64_t>(dlInfo.dli_fbase);
-        }
-        LOGI("il2cpp_base: %" PRIx64"", il2cpp_base);
-    } else {
+    if (!il2cpp_domain_get || !il2cpp_domain_get_assemblies || !il2cpp_thread_attach) {
         LOGE("Failed to initialize il2cpp api.");
-        return;
+        return false;
     }
-    while (!il2cpp_is_vm_thread(nullptr)) {
-        LOGI("Waiting for il2cpp_init...");
-        sleep(1);
+    Dl_info dlInfo{};
+    if (dladdr((void *) il2cpp_domain_get_assemblies, &dlInfo)) {
+        il2cpp_base = reinterpret_cast<uint64_t>(dlInfo.dli_fbase);
+    }
+    LOGI("il2cpp_base: %" PRIx64"", il2cpp_base);
+    if (il2cpp_is_vm_thread) {
+        int wait = 0;
+        while (!il2cpp_is_vm_thread(nullptr) && wait < 60) {
+            LOGI("Waiting for il2cpp_init...");
+            sleep(1);
+            wait++;
+        }
+        if (wait >= 60) {
+            LOGE("timeout waiting il2cpp_is_vm_thread");
+            return false;
+        }
+    } else {
+        sleep(3);
     }
     auto domain = il2cpp_domain_get();
+    if (!domain) {
+        LOGE("il2cpp_domain_get returned null");
+        return false;
+    }
     il2cpp_thread_attach(domain);
+    return true;
 }
 
 void il2cpp_dump(const char *outDir) {
