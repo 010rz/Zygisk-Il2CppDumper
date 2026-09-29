@@ -226,8 +226,15 @@ static int src_bpp_of(unsigned format, unsigned type) {
     }
 }
 
+static std::atomic_int g_calls{0};
+
 static void dump_pixels(const char *kind, int level, int width, int height, unsigned format,
                         unsigned type, unsigned internalformat, int imageSize, const void *pixels) {
+    int ncall = g_calls.fetch_add(1);
+    if (ncall < 80) {
+        LOGI("gl %s lv=%d %dx%d fmt=0x%x type=0x%x ifmt=0x%x pix=%p n=%d", kind, level, width,
+             height, format, type, internalformat, pixels, imageSize);
+    }
     if (!pixels || level != 0) {
         return;
     }
@@ -337,42 +344,47 @@ static void *dlsym_lib(const char *lib, const char *sym) {
     return dlsym(h, sym);
 }
 
+static const char *kGlesLibs[] = {
+    "/system/lib64/egl/libGLESv2_emulation.so",
+    "/system/lib64/libGLESv2_enc.so",
+    "libGLESv2_emulation.so",
+    "libGLESv2_enc.so",
+    "libGLESv2.so",
+    "libGLESv3.so",
+};
+
+static const char *kEglLibs[] = {
+    "/system/lib64/egl/libEGL_emulation.so",
+    "libEGL_emulation.so",
+    "libEGL.so",
+};
+
+static void hook_sym(const char *lib, const char *sym, void *replace, void **orig_slot, const char *tag) {
+    void *p = dlsym_lib(lib, sym);
+    if (!p) {
+        return;
+    }
+    void *orig = *orig_slot;
+    if (hook_arm64(p, replace, orig_slot) == 0) {
+        LOGI("%s hooked in %s %p orig=%p", tag, lib, p, *orig_slot);
+        if (*orig_slot == nullptr && orig) {
+            *orig_slot = orig;
+        }
+    }
+}
+
 static void install_hooks() {
-    void *tex = dlsym_lib("libGLESv2.so", "glTexImage2D");
-    if (tex) {
-        void *orig = nullptr;
-        if (hook_arm64(tex, reinterpret_cast<void *>(my_glTexImage2D), &orig) == 0 && orig) {
-            orig_glTexImage2D = reinterpret_cast<glTexImage2D_t>(orig);
-            LOGI("glTexImage2D hooked %p orig=%p", tex, orig);
-        }
+    for (auto *lib : kGlesLibs) {
+        hook_sym(lib, "glTexImage2D", reinterpret_cast<void *>(my_glTexImage2D),
+                 reinterpret_cast<void **>(&orig_glTexImage2D), "glTexImage2D");
+        hook_sym(lib, "glCompressedTexImage2D", reinterpret_cast<void *>(my_glCompressedTexImage2D),
+                 reinterpret_cast<void **>(&orig_glCompressedTexImage2D), "glCompressedTexImage2D");
+        hook_sym(lib, "glTexSubImage2D", reinterpret_cast<void *>(my_glTexSubImage2D),
+                 reinterpret_cast<void **>(&orig_glTexSubImage2D), "glTexSubImage2D");
     }
-    void *ctex = dlsym_lib("libGLESv2.so", "glCompressedTexImage2D");
-    if (ctex) {
-        void *orig = nullptr;
-        if (hook_arm64(ctex, reinterpret_cast<void *>(my_glCompressedTexImage2D), &orig) == 0 && orig) {
-            orig_glCompressedTexImage2D = reinterpret_cast<glCompressedTexImage2D_t>(orig);
-            LOGI("glCompressedTexImage2D hooked");
-        }
-    }
-    void *sub = dlsym_lib("libGLESv2.so", "glTexSubImage2D");
-    if (sub) {
-        void *orig = nullptr;
-        if (hook_arm64(sub, reinterpret_cast<void *>(my_glTexSubImage2D), &orig) == 0 && orig) {
-            orig_glTexSubImage2D = reinterpret_cast<glTexSubImage2D_t>(orig);
-            LOGI("glTexSubImage2D hooked");
-        }
-    }
-    void *egl = dlsym_lib("libEGL.so", "eglGetProcAddress");
-    if (egl) {
-        void *orig = nullptr;
-        if (hook_arm64(egl, reinterpret_cast<void *>(my_eglGetProcAddress), &orig) == 0 && orig) {
-            orig_eglGetProcAddress = reinterpret_cast<eglGetProcAddress_t>(orig);
-            LOGI("eglGetProcAddress hooked orig=%p", orig);
-        } else {
-            LOGE("eglGetProcAddress hook failed");
-        }
-    } else {
-        LOGW("eglGetProcAddress not found");
+    for (auto *lib : kEglLibs) {
+        hook_sym(lib, "eglGetProcAddress", reinterpret_cast<void *>(my_eglGetProcAddress),
+                 reinterpret_cast<void **>(&orig_eglGetProcAddress), "eglGetProcAddress");
     }
 }
 
@@ -392,12 +404,17 @@ static void *texdump_thread(void *p) {
     }
     LOGI("texdump dir %s", g_dir);
     bool hooked = false;
-    for (int i = 0; i < 80; i++) {
-        void *egl = dlopen("libEGL.so", RTLD_NOW);
-        if (egl && dlsym(egl, "eglGetProcAddress")) {
+    for (int i = 0; i < 120; i++) {
+        void *emu = dlopen("/system/lib64/egl/libGLESv2_emulation.so", RTLD_NOW);
+        void *enc = dlopen("/system/lib64/libGLESv2_enc.so", RTLD_NOW);
+        void *gles = dlopen("libGLESv2.so", RTLD_NOW);
+        if ((emu && dlsym(emu, "glTexImage2D")) || (enc && dlsym(enc, "glTexImage2D")) ||
+            (gles && dlsym(gles, "glTexImage2D"))) {
             install_hooks();
-            hooked = true;
-            break;
+            hooked = orig_glTexImage2D != nullptr || orig_eglGetProcAddress != nullptr;
+            if (hooked) {
+                break;
+            }
         }
         usleep(100 * 1000);
     }
