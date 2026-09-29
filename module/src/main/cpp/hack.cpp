@@ -28,6 +28,8 @@
 #define GL_BGRA_EXT 0x80E1
 #define GL_RGBA8 0x8058
 #define GL_RGB8 0x8051
+#define GL_RED 0x1903
+#define GL_RG 0x8227
 
 using eglGetProcAddress_t = void *(*)(const char *);
 using glTexImage2D_t = void (*)(unsigned, int, int, int, int, int, unsigned, unsigned, const void *);
@@ -205,6 +207,12 @@ static bool write_tga(const char *path, int w, int h, int src_bpp, const uint8_t
 }
 
 static int src_bpp_of(unsigned format, unsigned type) {
+    if (type == 0x1403 /* GL_UNSIGNED_SHORT */) {
+        if (format == 0x1903 || format == GL_RED) {
+            return 2;
+        }
+        return 0;
+    }
     if (type != GL_UNSIGNED_BYTE) {
         return 0;
     }
@@ -217,9 +225,11 @@ static int src_bpp_of(unsigned format, unsigned type) {
         case GL_RGB8:
             return 3;
         case GL_LUMINANCE_ALPHA:
+        case 0x8228: /* GL_RG */
             return 2;
         case GL_LUMINANCE:
         case GL_ALPHA:
+        case 0x1903: /* GL_RED */
             return 1;
         default:
             return 0;
@@ -248,8 +258,21 @@ static void dump_pixels(const char *kind, int level, int width, int height, unsi
     } else if (bpp > 0) {
         nbytes = static_cast<size_t>(width) * static_cast<size_t>(height) * static_cast<size_t>(bpp);
     } else {
-        LOGI("skip %s %dx%d fmt=0x%x type=0x%x ifmt=0x%x", kind, width, height, format, type,
-             internalformat);
+        nbytes = static_cast<size_t>(width) * static_cast<size_t>(height);
+        if (type == 0x1403) nbytes *= 2;
+        else if (type == 0x1406 /* float */) nbytes *= 4;
+        std::lock_guard<std::mutex> lock(g_mu);
+        if (g_index.load() >= kMaxFiles) return;
+        int idx = g_index.fetch_add(1);
+        char path[768];
+        snprintf(path, sizeof(path), "%s/%04d_%dx%d_fmt%x_type%x.bin", g_dir, idx, width, height,
+                 format, type);
+        int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+        if (fd >= 0) {
+            write_all(fd, pixels, nbytes);
+            close(fd);
+            LOGI("dump raw %s", path);
+        }
         return;
     }
     uint64_t h = fnv(&width, sizeof(width));
