@@ -35,11 +35,13 @@ using eglGetProcAddress_t = void *(*)(const char *);
 using glTexImage2D_t = void (*)(unsigned, int, int, int, int, int, unsigned, unsigned, const void *);
 using glCompressedTexImage2D_t = void (*)(unsigned, int, unsigned, int, int, int, int, const void *);
 using glTexSubImage2D_t = void (*)(unsigned, int, int, int, int, int, unsigned, unsigned, const void *);
+using glCompressedTexSubImage2D_t = void (*)(unsigned, int, int, int, int, int, unsigned, int, const void *);
 
 static eglGetProcAddress_t orig_eglGetProcAddress;
 static glTexImage2D_t orig_glTexImage2D;
 static glCompressedTexImage2D_t orig_glCompressedTexImage2D;
 static glTexSubImage2D_t orig_glTexSubImage2D;
+static glCompressedTexSubImage2D_t orig_glCompressedTexSubImage2D;
 
 static std::atomic_bool g_started{false};
 static std::atomic_int g_index{0};
@@ -333,6 +335,16 @@ static void my_glTexSubImage2D(unsigned target, int level, int xoffset, int yoff
     orig_glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
 }
 
+static void my_glCompressedTexSubImage2D(unsigned target, int level, int xoffset, int yoffset,
+                                         int width, int height, unsigned format, int imageSize,
+                                         const void *data) {
+    if (xoffset == 0 && yoffset == 0) {
+        dump_pixels("csub", level, width, height, 0, 0, format, imageSize, data);
+    }
+    orig_glCompressedTexSubImage2D(target, level, xoffset, yoffset, width, height, format,
+                                   imageSize, data);
+}
+
 static void *my_eglGetProcAddress(const char *name) {
     void *p = orig_eglGetProcAddress ? orig_eglGetProcAddress(name) : nullptr;
     if (!name) {
@@ -355,6 +367,12 @@ static void *my_eglGetProcAddress(const char *name) {
             orig_glTexSubImage2D = reinterpret_cast<glTexSubImage2D_t>(p);
         }
         return reinterpret_cast<void *>(my_glTexSubImage2D);
+    }
+    if (strcmp(name, "glCompressedTexSubImage2D") == 0) {
+        if (p && orig_glCompressedTexSubImage2D == nullptr) {
+            orig_glCompressedTexSubImage2D = reinterpret_cast<glCompressedTexSubImage2D_t>(p);
+        }
+        return reinterpret_cast<void *>(my_glCompressedTexSubImage2D);
     }
     return p;
 }
@@ -401,6 +419,10 @@ static void install_hooks() {
                  reinterpret_cast<void **>(&orig_glCompressedTexImage2D), "glCompressedTexImage2D");
         hook_sym(lib, "glTexSubImage2D", reinterpret_cast<void *>(my_glTexSubImage2D),
                  reinterpret_cast<void **>(&orig_glTexSubImage2D), "glTexSubImage2D");
+        hook_sym(lib, "glCompressedTexSubImage2D",
+                 reinterpret_cast<void *>(my_glCompressedTexSubImage2D),
+                 reinterpret_cast<void **>(&orig_glCompressedTexSubImage2D),
+                 "glCompressedTexSubImage2D");
     }
     for (auto *lib : kEglLibs) {
         hook_sym(lib, "eglGetProcAddress", reinterpret_cast<void *>(my_eglGetProcAddress),
