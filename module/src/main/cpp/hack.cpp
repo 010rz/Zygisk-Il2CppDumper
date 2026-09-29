@@ -349,14 +349,11 @@ static const char *kGlesLibs[] = {
     "/system/lib64/libGLESv2_enc.so",
     "libGLESv2_emulation.so",
     "libGLESv2_enc.so",
-    "libGLESv2.so",
-    "libGLESv3.so",
 };
 
 static const char *kEglLibs[] = {
     "/system/lib64/egl/libEGL_emulation.so",
     "libEGL_emulation.so",
-    "libEGL.so",
 };
 
 static void hook_sym(const char *lib, const char *sym, void *replace, void **orig_slot, const char *tag) {
@@ -405,13 +402,14 @@ static void *texdump_thread(void *p) {
     LOGI("texdump dir %s", g_dir);
     bool hooked = false;
     for (int i = 0; i < 120; i++) {
+        dlopen("/system/lib64/egl/libEGL_emulation.so", RTLD_NOW);
         void *emu = dlopen("/system/lib64/egl/libGLESv2_emulation.so", RTLD_NOW);
         void *enc = dlopen("/system/lib64/libGLESv2_enc.so", RTLD_NOW);
-        void *gles = dlopen("libGLESv2.so", RTLD_NOW);
-        if ((emu && dlsym(emu, "glTexImage2D")) || (enc && dlsym(enc, "glTexImage2D")) ||
-            (gles && dlsym(gles, "glTexImage2D"))) {
+        if ((emu && dlsym(emu, "glTexImage2D")) || (enc && dlsym(enc, "glTexImage2D"))) {
             install_hooks();
-            hooked = orig_glTexImage2D != nullptr || orig_eglGetProcAddress != nullptr;
+            hooked = orig_glTexImage2D != nullptr;
+            LOGI("emu=%p enc=%p orig_tex=%p orig_egl=%p", emu, enc, reinterpret_cast<void *>(orig_glTexImage2D),
+                 reinterpret_cast<void *>(orig_eglGetProcAddress));
             if (hooked) {
                 break;
             }
