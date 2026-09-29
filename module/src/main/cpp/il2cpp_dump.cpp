@@ -28,6 +28,7 @@ static uint64_t il2cpp_base = 0;
 void init_il2cpp_api(void *handle) {
 #define DO_API(r, n, p) {                      \
     n = (r (*) p)xdl_sym(handle, #n, nullptr); \
+    if (!n) n = (r (*) p)xdl_dsym(handle, #n, nullptr); \
     if(!n) {                                   \
         LOGW("api not found %s", #n);          \
     }                                          \
